@@ -1,4 +1,6 @@
-﻿# Cybersecurity Skills Router / 逆向技能路由包
+ai社区：https://linux.do
+
+ # Cybersecurity Skills Router / 逆向技能路由包
 
 > 本包放在哪个目录都行，AI 会自动检测实际路径。以下用 `<SKILL_ROOT>` 代指你的实际安装位置。
 
