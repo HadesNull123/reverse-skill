@@ -49,7 +49,13 @@ async function callTool(toolName, params) {
         try { resolve(JSON.parse(data)); } catch (e) { resolve({ error: data }); }
       });
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      reject(new Error(
+        `Cannot reach Burp MCP at ${BURP_HOST}:${BURP_PORT} (${err.code || err.message}). ` +
+        `Ensure Burp Suite is running with the "MCP Full Control" extension loaded. ` +
+        `If the port differs, set BURP_MCP_PORT and -Dburp.mcp.port=<same> on Burp.`
+      ));
+    });
     req.write(body);
     req.end();
   });
@@ -207,10 +213,11 @@ function handleRequest(msg) {
       return null; // No response needed
 
     case 'tools/list':
-      if (!TOOLS) return { jsonrpc: '2.0', id, error: { code: -1, message: 'Tools not loaded. Is Burp running?' } };
+      if (!TOOLS) return { jsonrpc: '2.0', id, error: { code: -32000, message: `Burp MCP not connected at ${BURP_HOST}:${BURP_PORT}. Start Burp with the "MCP Full Control" extension loaded, then reconnect.` } };
       return { jsonrpc: '2.0', id, result: { tools: buildToolDefinitions(TOOLS) } };
 
     case 'tools/call': {
+      if (!TOOLS) return { jsonrpc: '2.0', id, error: { code: -32000, message: `Burp MCP not connected at ${BURP_HOST}:${BURP_PORT}. Start Burp with the "MCP Full Control" extension loaded, then reconnect.` } };
       const toolName = params.name.replace(/^burp_/, '');
       const toolArgs = params.arguments || {};
       return callTool(toolName, toolArgs).then(result => ({
@@ -239,27 +246,38 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   let buffer = '';
 
+  let pending = 0;
+  let stdinClosed = false;
+
   rl.on('line', async (line) => {
     buffer += line;
+    let msg;
     try {
-      const msg = JSON.parse(buffer);
+      msg = JSON.parse(buffer);
       buffer = '';
-      
-      const response = await handleRequest(msg);
-      if (response) {
-        const out = JSON.stringify(response);
-        process.stdout.write(out + '\n');
-      }
     } catch (e) {
-      // Incomplete JSON, wait for more
-      if (e instanceof SyntaxError) return;
+      if (e instanceof SyntaxError) return; // incomplete JSON, wait for more
       buffer = '';
-      const errResp = { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } };
-      process.stdout.write(JSON.stringify(errResp) + '\n');
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }) + '\n');
+      return;
+    }
+
+    pending++;
+    try {
+      const response = await handleRequest(msg);
+      if (response) process.stdout.write(JSON.stringify(response) + '\n');
+    } catch (err) {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -1, message: err.message || 'Handler error' } }) + '\n');
+    } finally {
+      pending--;
+      if (stdinClosed && pending === 0) process.exit(0);
     }
   });
 
-  rl.on('close', () => process.exit(0));
+  rl.on('close', () => {
+    stdinClosed = true;
+    if (pending === 0) process.exit(0);
+  });
 }
 
 main();
